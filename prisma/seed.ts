@@ -220,6 +220,7 @@ async function main() {
         companyId: companies[5].id, // Nexus
         firstName: "Sarah",
         lastName: "Chen",
+        fullName: "Sarah Chen",
         email: "schen@nexustech.io",
         title: "Chief Financial Officer",
         seniority: "C_LEVEL",
@@ -233,6 +234,7 @@ async function main() {
         companyId: companies[5].id,
         firstName: "Mike",
         lastName: "Johnson",
+        fullName: "Mike Johnson",
         email: "mjohnson@nexustech.io",
         title: "VP of Human Resources",
         seniority: "VP",
@@ -246,6 +248,7 @@ async function main() {
         companyId: companies[6].id, // Pinnacle
         firstName: "Robert",
         lastName: "Williams",
+        fullName: "Robert Williams",
         email: "rwilliams@pinnaclemfg.com",
         title: "Chief Executive Officer",
         seniority: "C_LEVEL",
@@ -259,6 +262,7 @@ async function main() {
         companyId: companies[7].id, // Vertex
         firstName: "Jennifer",
         lastName: "Martinez",
+        fullName: "Jennifer Martinez",
         email: "jmartinez@vertexfin.com",
         title: "General Counsel",
         seniority: "C_LEVEL",
@@ -272,6 +276,7 @@ async function main() {
         companyId: companies[8].id, // CloudScale
         firstName: "David",
         lastName: "Park",
+        fullName: "David Park",
         email: "dpark@cloudscale.io",
         title: "Chief Technology Officer",
         seniority: "C_LEVEL",
@@ -285,6 +290,7 @@ async function main() {
         companyId: companies[9].id, // MedTech
         firstName: "Lisa",
         lastName: "Thompson",
+        fullName: "Lisa Thompson",
         email: "lthompson@medtechsolutions.com",
         title: "VP Risk Management",
         seniority: "VP",
