@@ -3,61 +3,33 @@
 import { Header } from "@/components/layout";
 import { Card, CardContent, Badge, Button } from "@/components/ui";
 import { Zap, Filter, Download, Search } from "lucide-react";
-
-const triggers = [
-  {
-    id: "1",
-    company: "TechCorp Industries",
-    caseType: "Securities Fraud",
-    caseNumber: "1:24-cv-01234",
-    court: "S.D.N.Y.",
-    filingDate: "2024-01-15",
-    status: "new",
-    prospects: 12,
-  },
-  {
-    id: "2",
-    company: "Global Manufacturing LLC",
-    caseType: "Employment Discrimination",
-    caseNumber: "3:24-cv-05678",
-    court: "N.D. Cal.",
-    filingDate: "2024-01-14",
-    status: "new",
-    prospects: 8,
-  },
-  {
-    id: "3",
-    company: "DataFlow Systems",
-    caseType: "Data Breach",
-    caseNumber: "1:24-cv-09012",
-    court: "D. Del.",
-    filingDate: "2024-01-13",
-    status: "reviewed",
-    prospects: 15,
-  },
-  {
-    id: "4",
-    company: "Acme Financial Services",
-    caseType: "D&O Liability",
-    caseNumber: "2:24-cv-03456",
-    court: "C.D. Cal.",
-    filingDate: "2024-01-12",
-    status: "reviewed",
-    prospects: 22,
-  },
-  {
-    id: "5",
-    company: "Healthcare Plus Inc",
-    caseType: "EPLI",
-    caseNumber: "1:24-cv-07890",
-    court: "S.D. Tex.",
-    filingDate: "2024-01-11",
-    status: "archived",
-    prospects: 6,
-  },
-];
+import { api } from "@/lib/trpc";
 
 export default function TriggersPage() {
+  const { data: triggersData, isLoading } = api.triggers.list.useQuery({
+    limit: 50,
+  });
+
+  const formatDate = (date: Date) => {
+    return new Date(date).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const getStatusVariant = (status: string) => {
+    switch (status) {
+      case "NEW":
+        return "cyan";
+      case "REVIEWED":
+        return "success";
+      case "ARCHIVED":
+        return "default";
+      default:
+        return "default";
+    }
+  };
   return (
     <div className="min-h-screen">
       <Header
@@ -91,79 +63,93 @@ export default function TriggersPage() {
         {/* Triggers List */}
         <Card>
           <CardContent className="p-0">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-border-subtle">
-                  <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
-                    Company
-                  </th>
-                  <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
-                    Case Type
-                  </th>
-                  <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
-                    Court
-                  </th>
-                  <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
-                    Filing Date
-                  </th>
-                  <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
-                    Status
-                  </th>
-                  <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
-                    Prospects
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {triggers.map((trigger) => (
-                  <tr
-                    key={trigger.id}
-                    className="border-b border-border-subtle hover:bg-background-tertiary cursor-pointer transition-colors"
-                  >
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-lg bg-status-warning/10 flex items-center justify-center">
-                          <Zap className="h-4 w-4 text-status-warning" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-text-primary">
-                            {trigger.company}
-                          </p>
-                          <p className="text-xs text-text-muted">
-                            {trigger.caseNumber}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-text-secondary">
-                      {trigger.caseType}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-text-secondary">
-                      {trigger.court}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-text-secondary">
-                      {trigger.filingDate}
-                    </td>
-                    <td className="px-6 py-4">
-                      <Badge
-                        variant={
-                          trigger.status === "new"
-                            ? "cyan"
-                            : trigger.status === "reviewed"
-                            ? "success"
-                            : "default"
-                        }
-                      >
-                        {trigger.status}
-                      </Badge>
-                    </td>
-                    <td className="px-6 py-4">
-                      <Badge variant="cyan">{trigger.prospects}</Badge>
-                    </td>
-                  </tr>
+            {isLoading ? (
+              <div className="p-6 space-y-4">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="animate-pulse flex items-center gap-4">
+                    <div className="h-8 w-8 rounded-lg bg-background-tertiary" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-4 w-48 bg-background-tertiary rounded" />
+                      <div className="h-3 w-32 bg-background-tertiary rounded" />
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            ) : triggersData?.triggers.length === 0 ? (
+              <div className="text-center py-12 text-text-muted">
+                <Zap className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                <p className="text-lg font-medium">No triggers found</p>
+                <p className="text-sm mt-1">
+                  Triggers will appear here when lawsuit filings are detected
+                </p>
+              </div>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-border-subtle">
+                    <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
+                      Case
+                    </th>
+                    <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
+                      Category
+                    </th>
+                    <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
+                      Court
+                    </th>
+                    <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
+                      Filing Date
+                    </th>
+                    <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
+                      Status
+                    </th>
+                    <th className="text-left text-xs font-medium text-text-muted uppercase tracking-wider px-6 py-4">
+                      Prospects
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {triggersData?.triggers.map((trigger) => (
+                    <tr
+                      key={trigger.id}
+                      className="border-b border-border-subtle hover:bg-background-tertiary cursor-pointer transition-colors"
+                    >
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="h-8 w-8 rounded-lg bg-status-warning/10 flex items-center justify-center">
+                            <Zap className="h-4 w-4 text-status-warning" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-text-primary">
+                              {trigger.title}
+                            </p>
+                            <p className="text-xs text-text-muted">
+                              {trigger.caseNumber || "N/A"}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-text-secondary">
+                        {trigger.caseCategory || "Unknown"}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-text-secondary">
+                        {trigger.jurisdiction || "N/A"}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-text-secondary">
+                        {formatDate(new Date(trigger.filingDate))}
+                      </td>
+                      <td className="px-6 py-4">
+                        <Badge variant={getStatusVariant(trigger.status)}>
+                          {trigger.status.toLowerCase()}
+                        </Badge>
+                      </td>
+                      <td className="px-6 py-4">
+                        <Badge variant="cyan">{trigger._count.prospects}</Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </CardContent>
         </Card>
       </div>
