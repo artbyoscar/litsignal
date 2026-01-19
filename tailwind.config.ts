@@ -10,7 +10,6 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // LitSignal Design System
         background: {
           primary: "#0a0e17",
           secondary: "#111827",

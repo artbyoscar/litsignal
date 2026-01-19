@@ -8,13 +8,38 @@
     --foreground: 210 40% 98%;
   }
 
+  * {
+    @apply border-border-subtle;
+  }
+
   body {
     @apply bg-background-primary text-text-primary antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-background-secondary;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border-default rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-text-muted;
   }
 }
 
 @layer utilities {
   .glow-cyan {
     box-shadow: 0 0 20px rgba(34, 211, 238, 0.15);
+  }
+
+  ::selection {
+    @apply bg-accent-cyan/30 text-text-primary;
   }
 }
