@@ -1,6 +1,5 @@
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -232,7 +231,6 @@ model Trigger {
   @@index([processingStatus])
   @@index([relevanceScore(sort: Desc)])
   @@index([deletedAt])
-  @@fulltext([title, caseNumber])
   @@map("triggers")
 }
 
@@ -488,7 +486,6 @@ model Company {
   @@index([employeeCount])
   @@index([revenue])
   @@index([deletedAt])
-  @@fulltext([name, description])
   @@map("companies")
 }
 
@@ -589,7 +586,6 @@ model Contact {
   @@index([lastName, firstName])
   @@index([seniority])
   @@index([deletedAt])
-  @@fulltext([fullName, title])
   @@map("contacts")
 }
 
