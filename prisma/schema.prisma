@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
 }
 
 datasource db {
@@ -7,25 +8,1358 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Core Models - We will expand these as we build features
+// ============================================
+// AUTHENTICATION & ORGANIZATIONS
+// ============================================
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  plan      String   @default("solo")
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
+
+  // Plan & Billing
+  plan             PlanType  @default(SOLO)
+  stripeCustomerId String?   @unique
+  stripeSubId      String?   @unique
+  subscriptionStatus SubscriptionStatus @default(TRIAL)
+  trialEndsAt      DateTime?
+  subscriptionEndsAt DateTime?
+
+  // Credits & Usage
+  credits         Int      @default(60)
+  creditsUsed     Int      @default(0)
+  creditResetDate DateTime @default(now())
+  billingCycle    BillingCycle @default(MONTHLY)
+
+  // Territory & Targeting
+  territory        Json? // { type: "states", states: ["CA", "NY"] } or { type: "radius", center: [lat, lng], radius: 100 }
+  targetIndustries String[]
+  targetCaseTypes  CaseCategory[]
+  companySizeMin   Int?
+  companySizeMax   Int?
+
+  // Settings
+  settings Json @default("{}")
+
+  // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  users     User[]
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  users             User[]
+  triggers          Trigger[]
+  prospects         Prospect[]
+  campaigns         Campaign[]
+  alerts            Alert[]
+  clientList        ClientListEntry[]
+  auditLogs         AuditLog[]
+  enrichmentCredits EnrichmentCredit[]
+  webhooks          Webhook[]
+  apiKeys           ApiKey[]
+
+  @@index([slug])
+  @@index([plan])
+  @@index([deletedAt])
+  @@map("organizations")
+}
+
+enum PlanType {
+  TRIAL       // 14-day trial
+  SOLO        // $149/mo - 60 credits, 1 user
+  TEAM        // $349/mo - 150 credits, 5 users
+  AGENCY      // $749/mo - 400 credits, 15 users
+  ENTERPRISE  // Custom pricing - unlimited
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  PAUSED
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
 }
 
 model User {
-  id             String       @id @default(cuid())
-  clerkId        String       @unique
-  email          String       @unique
-  name           String?
-  role           String       @default("member")
+  id      String @id @default(cuid())
+  clerkId String @unique
+  email   String @unique
+  name    String?
+  avatar  String?
+  role    UserRole @default(MEMBER)
+
+  // Organization
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Notification Preferences
+  digestEnabled    Boolean         @default(true)
+  digestFrequency  DigestFrequency @default(DAILY)
+  digestTime       String          @default("08:00") // HH:mm format
+  timezone         String          @default("America/New_York")
+  emailNotifications Boolean       @default(true)
+  inAppNotifications Boolean       @default(true)
+
+  // Activity Tracking
+  lastLoginAt   DateTime?
+  lastActiveAt  DateTime?
+  loginCount    Int       @default(0)
+
+  // Status
+  status UserStatus @default(ACTIVE)
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  assignedProspects  Prospect[]
+  createdCampaigns   Campaign[]
+  alerts             Alert[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  prospectActivities ProspectActivity[]
+
+  @@index([organizationId])
+  @@index([clerkId])
+  @@index([email])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+enum UserRole {
+  OWNER   // Full access
+  ADMIN   // All features except billing
+  MEMBER  // Standard access
+  VIEWER  // Read-only
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  INVITED
+}
+
+enum DigestFrequency {
+  REALTIME
+  HOURLY
+  DAILY
+  WEEKLY
+  NEVER
+}
+
+// ============================================
+// COURT CASES (TRIGGERS)
+// ============================================
+
+model Trigger {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // External Reference
+  externalId String // CourtListener ID, PACER ID, etc.
+  source     DataSource @default(COURTLISTENER)
+
+  // Case Identifiers
+  caseNumber String
+  docketId   String? // For PACER
+  courtId    String
+  courtName  String
+  courtType  CourtType
+  jurisdiction String // State abbreviation or "Federal"
+  district   String? // Court district
+
+  // Case Details
+  title          String
+  caseType       String // Raw from court system
+  caseCategory   CaseCategory?
+  filingDate     DateTime
+  statusDate     DateTime?
+  status         TriggerStatus @default(NEW)
+  docketEntries  Int           @default(0)
+  judgeAssigned  String?
+
+  // Parties (denormalized for performance)
+  plaintiffs String[]
+  defendants String[]
+
+  // Insurance Classification
+  insuranceLines  InsuranceLine[]
+  relevanceScore  Int?            @default(0) // 0-100
+  relevanceReason String?         @db.Text
+
+  // AI Analysis
+  aiSummary          String? @db.Text
+  aiRiskAssessment   String? @db.Text
+  aiRecommendedLines InsuranceLine[]
+
+  // Raw Data & Links
+  rawData   Json?
+  docketUrl String?
+  pacerUrl  String?
+
+  // Processing Status
+  processingStatus ProcessingStatus @default(PENDING)
+  processingError  String?          @db.Text
+  processedAt      DateTime?
+
+  // Metadata
+  lastSyncedAt DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime? // Soft delete
+
+  // Relations
+  parties   CaseParty[]
+  prospects Prospect[]
+  documents TriggerDocument[]
+
+  @@unique([externalId, source])
+  @@index([organizationId, status])
+  @@index([organizationId, filingDate(sort: Desc)])
+  @@index([filingDate(sort: Desc)])
+  @@index([caseCategory])
+  @@index([jurisdiction])
+  @@index([processingStatus])
+  @@index([relevanceScore(sort: Desc)])
+  @@index([deletedAt])
+  @@fulltext([title, caseNumber])
+  @@map("triggers")
+}
+
+enum DataSource {
+  COURTLISTENER
+  PACER
+  UNICOURT
+  STATE_COURT
+  MANUAL
+}
+
+enum CourtType {
+  FEDERAL_DISTRICT
+  FEDERAL_APPELLATE
+  FEDERAL_BANKRUPTCY
+  FEDERAL_SUPREME
+  STATE_TRIAL
+  STATE_APPELLATE
+  STATE_SUPREME
+  ADMINISTRATIVE
+}
+
+enum TriggerStatus {
+  NEW
+  REVIEWED
+  PROCESSING
+  ENRICHED
+  ARCHIVED
+  EXCLUDED
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum CaseCategory {
+  // D&O Triggers
+  SECURITIES_FRAUD
+  SHAREHOLDER_DERIVATIVE
+  MERGER_OBJECTION
+  BREACH_FIDUCIARY
+  CLASS_ACTION
+
+  // EPLI Triggers
+  EMPLOYMENT_DISCRIMINATION
+  WRONGFUL_TERMINATION
+  SEXUAL_HARASSMENT
+  WAGE_HOUR
+  RETALIATION
+  ADA_VIOLATION
+  FMLA_VIOLATION
+
+  // Cyber Triggers
+  DATA_BREACH
+  PRIVACY_VIOLATION
+  RANSOMWARE
+  PCI_VIOLATION
+  HIPAA_VIOLATION
+  GDPR_VIOLATION
+
+  // E&O Triggers
+  PROFESSIONAL_MALPRACTICE
+  ERRORS_OMISSIONS
+  LEGAL_MALPRACTICE
+  MEDICAL_MALPRACTICE
+
+  // Other
+  PRODUCT_LIABILITY
+  ENVIRONMENTAL
+  ANTITRUST
+  CONTRACT_DISPUTE
+  IP_INFRINGEMENT
+  TRADE_SECRET
+  OTHER
+}
+
+enum InsuranceLine {
+  DO      // Directors & Officers
+  EPLI    // Employment Practices Liability
+  CYBER   // Cyber Liability
+  EO      // Errors & Omissions
+  PL      // Product Liability
+  GL      // General Liability
+  ENVIRO  // Environmental
+  FIDUCIARY // Fiduciary Liability
+  MEDICAL // Medical Malpractice
+  LEGAL   // Legal Malpractice
+}
+
+model TriggerDocument {
+  id        String @id @default(cuid())
+  triggerId String
+  trigger   Trigger @relation(fields: [triggerId], references: [id], onDelete: Cascade)
+
+  // Document Info
+  documentType String // Complaint, Motion, Order, etc.
+  title        String
+  filedDate    DateTime
+  pageCount    Int?
+
+  // Storage
+  fileUrl     String?
+  fileKey     String? // S3 key or storage identifier
+  fileSize    Int? // bytes
+  mimeType    String?
+
+  // Extraction
+  extractedText String? @db.Text
+  extractedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([triggerId])
+  @@map("trigger_documents")
+}
+
+model CaseParty {
+  id        String  @id @default(cuid())
+  triggerId String
+  trigger   Trigger @relation(fields: [triggerId], references: [id], onDelete: Cascade)
+
+  // Party Info
+  role      PartyRole
+  name      String // Raw name from filing
+  partyType PartyType
+  counsel   String? // Attorney name
+
+  // Entity Resolution
+  companyId   String?
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  matchScore  Int?     @default(0) // 0-100 confidence
+  matchStatus MatchStatus @default(PENDING)
+  matchedBy   String? // "auto" or userId
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([triggerId])
+  @@index([companyId])
+  @@index([matchStatus])
+  @@index([name])
+  @@map("case_parties")
+}
+
+enum PartyRole {
+  PLAINTIFF
+  DEFENDANT
+  THIRD_PARTY
+  INTERVENOR
+  AMICUS
+}
+
+enum PartyType {
+  INDIVIDUAL
+  CORPORATION
+  LLC
+  PARTNERSHIP
+  GOVERNMENT
+  NONPROFIT
+  TRUST
+  UNKNOWN
+}
+
+enum MatchStatus {
+  PENDING
+  AUTO_MATCHED
+  CONFIRMED
+  REJECTED
+  MANUAL_REVIEW
+}
+
+// ============================================
+// COMPANIES
+// ============================================
+
+model Company {
+  id String @id @default(cuid())
+
+  // Core Identity
+  name      String
+  legalName String?
+  domain    String? @unique
+
+  // External IDs
+  apolloId    String? @unique
+  linkedinUrl String?
+  crunchbaseId String? @unique
+  ein         String? @unique // Employer Identification Number
+
+  // Firmographics
+  industry       String?
+  industryGroup  String?
+  naicsCode      String?
+  sicCode        String?
+  employeeCount  Int?
+  employeeRange  String?
+  revenue        Float?
+  revenueRange   String?
+  foundedYear    Int?
+  companyType    CompanyType?
+  publiclyTraded Boolean     @default(false)
+  ticker         String?
+
+  // Location
+  address   String?
+  address2  String?
+  city      String?
+  state     String?
+  zip       String?
+  country   String  @default("US")
+  latitude  Float?
+  longitude Float?
+
+  // Business Info
+  description   String? @db.Text
+  websiteUrl    String?
+  phoneNumber   String?
+  technologies  String[] // Tech stack
+  keywords      String[] // For search
+
+  // Enrichment
+  enrichmentSource   String?
+  enrichmentProvider EnrichmentProvider?
+  enrichedAt         DateTime?
+  enrichmentCost     Float?              @default(0)
+
+  // Quality Score
+  dataQuality    Int @default(0) // 0-100
+  lastValidated  DateTime?
+  validationErrors String[]
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  aliases     CompanyAlias[]
+  contacts    Contact[]
+  caseParties CaseParty[]
+  prospects   Prospect[]
+
+  @@index([name])
+  @@index([domain])
+  @@index([state])
+  @@index([industry])
+  @@index([employeeCount])
+  @@index([revenue])
+  @@index([deletedAt])
+  @@fulltext([name, description])
+  @@map("companies")
+}
+
+enum CompanyType {
+  PUBLIC
+  PRIVATE
+  NONPROFIT
+  GOVERNMENT
+  PARTNERSHIP
+  SOLE_PROPRIETOR
+}
+
+enum EnrichmentProvider {
+  APOLLO
+  CLEARBIT
+  ZI
+  LUSHA
+  MANUAL
+}
+
+model CompanyAlias {
+  id        String @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  alias      String // Alternate name
+  source     AliasSource
+  confidence Int?        @default(100) // 0-100
+
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, alias])
+  @@index([alias])
+  @@map("company_aliases")
+}
+
+enum AliasSource {
+  COURT_FILING
+  USER_CONFIRMED
+  AUTO_MATCHED
+  ENRICHMENT
+  MANUAL
+}
+
+model Contact {
+  id        String @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Identity
+  firstName String
+  lastName  String
+  fullName  String // Denormalized for search
+  email     String?
+  phone     String?
+  mobile    String?
+
+  // Professional
+  title         String?
+  department    String?
+  seniority     Seniority?
+  isDecisionMaker Boolean @default(false)
+
+  // Social
+  linkedinUrl String?
+  twitterUrl  String?
+
+  // External IDs
+  apolloId String? @unique
+
+  // Email Verification
+  emailStatus     EmailStatus?
+  emailVerifiedAt DateTime?
+
+  // Insurance Relevance
+  relevantFor InsuranceLine[]
+  relevanceScore Int? @default(0)
+
+  // Enrichment
+  enrichedAt         DateTime?
+  enrichmentProvider EnrichmentProvider?
+  enrichmentCost     Float?              @default(0)
+
+  // Status
+  status ContactStatus @default(ACTIVE)
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  prospectContacts ProspectContact[]
+
+  @@unique([companyId, email])
+  @@index([companyId])
+  @@index([email])
+  @@index([lastName, firstName])
+  @@index([seniority])
+  @@index([deletedAt])
+  @@fulltext([fullName, title])
+  @@map("contacts")
+}
+
+enum ContactStatus {
+  ACTIVE
+  BOUNCED
+  UNSUBSCRIBED
+  INVALID
+}
+
+enum EmailStatus {
+  VALID
+  INVALID
+  CATCH_ALL
+  DISPOSABLE
+  UNKNOWN
+}
+
+enum Seniority {
+  C_LEVEL
+  VP
+  DIRECTOR
+  MANAGER
+  SENIOR
+  ENTRY
+  UNKNOWN
+}
+
+// ============================================
+// PROSPECTS
+// ============================================
+
+model Prospect {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Source
+  triggerId String
+  trigger   Trigger @relation(fields: [triggerId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Classification
+  prospectType   ProspectType
+  insuranceLines InsuranceLine[]
+
+  // Multi-dimensional Scoring (0-100)
+  qualityScore Int @default(0) // Data quality
+  urgencyScore Int @default(0) // Time sensitivity
+  fitScore     Int @default(0) // ICP match
+  overallScore Int @default(0) // Weighted average
+
+  // Score Components (JSON for flexibility)
+  scoreBreakdown Json? // { "firmographics": 85, "litigation": 90, "timing": 75 }
+  scoreUpdatedAt DateTime?
+
+  // Status & Assignment
+  status       ProspectStatus @default(NEW)
+  assignedToId String?
+  assignedTo   User?          @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt   DateTime?
+
+  // Lifecycle Tracking
+  viewedAt    DateTime?
+  contactedAt DateTime?
+  qualifiedAt DateTime?
+  proposalAt  DateTime?
+  closedAt    DateTime?
+
+  // Conversion
+  conversionStatus ConversionStatus @default(OPEN)
+  conversionValue  Float?
+  conversionDate   DateTime?
+  lostReason       String?
+
+  // Priority & Tags
+  priority Int      @default(0) // 0-5 stars
+  tags     String[]
+
+  // Notes & Context
+  notes           String? @db.Text
+  internalNotes   String? @db.Text
+  nextFollowUpAt  DateTime?
+  lastContactedAt DateTime?
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  contacts        ProspectContact[]
+  campaignMembers CampaignMember[]
+  activities      ProspectActivity[]
+
+  @@unique([organizationId, triggerId, companyId])
+  @@index([organizationId, status])
+  @@index([organizationId, overallScore(sort: Desc)])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([overallScore(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([priority(sort: Desc)])
+  @@index([nextFollowUpAt])
+  @@index([deletedAt])
+  @@map("prospects")
+}
+
+enum ProspectType {
+  DEFENDANT   // Company being sued
+  PEER        // Similar company (same industry/region)
+  COMPETITOR  // Direct competitor
+  SUPPLIER    // Supply chain
+  CUSTOMER    // Customer of defendant
+}
+
+enum ProspectStatus {
+  NEW         // Just created
+  CONTACTED   // Outreach sent
+  RESPONDING  // In conversation
+  QUALIFIED   // Meets criteria
+  PROPOSAL    // Proposal stage
+  NEGOTIATION // Discussing terms
+  WON         // Deal closed
+  LOST        // Deal lost
+  ARCHIVED    // Removed from pipeline
+}
+
+enum ConversionStatus {
+  OPEN
+  WON
+  LOST
+  ARCHIVED
+}
+
+model ProspectContact {
+  id         String  @id @default(cuid())
+  prospectId String
+  prospect   Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  isPrimary Boolean @default(false)
+  role      String? // "Decision Maker", "Influencer", etc.
+
+  createdAt DateTime @default(now())
+
+  @@unique([prospectId, contactId])
+  @@index([prospectId])
+  @@index([contactId])
+  @@map("prospect_contacts")
+}
+
+model ProspectActivity {
+  id         String  @id @default(cuid())
+  prospectId String
+  prospect   Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  type        ActivityType
+  description String?      @db.Text
+  metadata    Json? // Flexible storage for activity-specific data
+
+  createdAt DateTime @default(now())
+
+  @@index([prospectId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt(sort: Desc)])
+  @@map("prospect_activities")
+}
+
+enum ActivityType {
+  CREATED
+  VIEWED
+  EXPORTED
+  EMAILED
+  EMAIL_OPENED
+  EMAIL_CLICKED
+  EMAIL_REPLIED
+  CALLED
+  VOICEMAIL
+  MEETING_SCHEDULED
+  MEETING_HELD
+  PROPOSAL_SENT
+  PROPOSAL_VIEWED
+  CONTRACT_SENT
+  STATUS_CHANGED
+  NOTE_ADDED
+  ASSIGNED
+  UNASSIGNED
+  TAGGED
+  SCORE_UPDATED
+}
+
+// ============================================
+// CAMPAIGNS
+// ============================================
+
+model Campaign {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Basic Info
+  name        String
+  description String? @db.Text
+  status      CampaignStatus @default(DRAFT)
+
+  // Template
+  subject      String?
+  bodyTemplate String? @db.Text
+
+  // Variables available: {{companyName}}, {{firstName}}, {{caseNumber}}, etc.
+  templateVariables String[] @default([])
+
+  // Sending Configuration
+  sendFrom      String? // Email address
+  sendFromName  String? // Display name
+  replyTo       String?
+  trackOpens    Boolean @default(true)
+  trackClicks   Boolean @default(true)
+
+  // Timing
+  sendAt        DateTime? // Scheduled send time
+  sendBatchSize Int?      @default(50) // Emails per hour
+  sendDays      Int[]     @default([1, 2, 3, 4, 5]) // Mon-Fri
+
+  // Stats (denormalized for performance)
+  prospectCount Int @default(0)
+  sentCount     Int @default(0)
+  deliveredCount Int @default(0)
+  openedCount   Int @default(0)
+  clickedCount  Int @default(0)
+  repliedCount  Int @default(0)
+  bouncedCount  Int @default(0)
+  unsubCount    Int @default(0)
+
+  // Calculated Metrics
+  openRate   Float? // openedCount / deliveredCount
+  clickRate  Float? // clickedCount / deliveredCount
+  replyRate  Float? // repliedCount / deliveredCount
+  bounceRate Float? // bouncedCount / sentCount
+
+  // Creator
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  startedAt DateTime?
+  pausedAt  DateTime?
+  completedAt DateTime?
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  members CampaignMember[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([createdById])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("campaigns")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+model CampaignMember {
+  id         String  @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  prospectId String
+  prospect   Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  // Sending
+  status       CampaignMemberStatus @default(PENDING)
+  emailAddress String?
+
+  // Tracking
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  openedAt     DateTime?
+  clickedAt    DateTime?
+  repliedAt    DateTime?
+  bouncedAt    DateTime?
+  unsubAt      DateTime?
+
+  openCount    Int @default(0)
+  clickCount   Int @default(0)
+
+  // Error Handling
+  errorMessage String?
+  retryCount   Int     @default(0)
+
+  // Personalization
+  personalizedSubject String?
+  personalizedBody    String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([campaignId, prospectId])
+  @@index([campaignId, status])
+  @@index([prospectId])
+  @@index([status])
+  @@index([sentAt])
+  @@map("campaign_members")
+}
+
+enum CampaignMemberStatus {
+  PENDING
+  SCHEDULED
+  SENDING
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  REPLIED
+  BOUNCED
+  UNSUBSCRIBED
+  FAILED
+}
+
+// ============================================
+// ALERTS
+// ============================================
+
+model Alert {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Basic Info
+  name        String
+  description String? @db.Text
+  status      AlertStatus @default(ACTIVE)
+
+  // Criteria (AND logic between fields)
+  caseCategories CaseCategory[]
+  insuranceLines InsuranceLine[]
+  jurisdictions  String[] // State abbreviations or "Federal"
+  courtTypes     CourtType[]
+
+  minCompanySize Int?
+  maxCompanySize Int?
+  industries     String[]
+
+  // Advanced Filters (JSON for flexibility)
+  advancedFilters Json? // { "revenueMin": 10000000, "keywords": ["securities"] }
+
+  // Notification Settings
+  notifyEmail Boolean        @default(true)
+  notifyInApp Boolean        @default(true)
+  notifySlack Boolean        @default(false)
+  slackWebhook String?
+  frequency   AlertFrequency @default(IMMEDIATE)
+
+  // Quiet Hours
+  quietHoursStart String? // HH:mm format
+  quietHoursEnd   String? // HH:mm format
+  quietDays       Int[]   @default([]) // 0=Sun, 6=Sat
+
+  // Stats
+  triggerCount    Int       @default(0)
+  lastTriggeredAt DateTime?
+
+  // Performance
+  avgRelevanceScore Float? // Average score of triggered cases
+  falsePositiveRate Float? // User feedback
+
+  // Owner
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  notifications Notification[]
+
+  @@index([organizationId, status])
+  @@index([createdById])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("alerts")
+}
+
+enum AlertStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum AlertFrequency {
+  IMMEDIATE    // Real-time
+  HOURLY       // Batched every hour
+  DAILY_DIGEST // Once per day
+  WEEKLY_DIGEST // Once per week
+}
+
+model Notification {
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alertId String?
+  alert   Alert? @relation(fields: [alertId], references: [id], onDelete: SetNull)
+
+  // Content
+  type    NotificationType
+  title   String
+  message String           @db.Text
+
+  // Links
+  linkUrl  String?
+  linkText String?
+
+  // Metadata
+  metadata Json?
+
+  // Status
+  read   Boolean   @default(false)
+  readAt DateTime?
+
+  // Delivery
+  deliveredVia String[] // ["email", "in_app", "slack"]
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([alertId])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  NEW_TRIGGER
+  PROSPECT_QUALIFIED
+  CAMPAIGN_COMPLETED
+  CREDIT_LOW
+  SUBSCRIPTION_EXPIRING
+  TEAM_MEMBER_ADDED
+  SYSTEM_ALERT
+}
+
+// ============================================
+// CLIENT EXCLUSION LIST
+// ============================================
+
+model ClientListEntry {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Company Identifiers
+  companyName    String
+  normalizedName String // Lowercase, no punctuation for fuzzy matching
+  domain         String?
+
+  // Reason
+  reason String? @db.Text
+
+  // Status
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, normalizedName])
+  @@index([organizationId])
+  @@index([domain])
+  @@index([active])
+  @@map("client_list_entries")
+}
+
+// ============================================
+// ENRICHMENT & CREDITS
+// ============================================
+
+model EnrichmentCredit {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Transaction
+  type        CreditTransactionType
+  amount      Int // Positive for credit, negative for debit
+  balance     Int // Balance after transaction
+
+  // Context
+  entityType  String? // "Company", "Contact"
+  entityId    String?
+  provider    String? // "Apollo", "Clearbit"
+  cost        Float?  @default(0) // Dollar cost
+
+  // Metadata
+  description String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([type])
+  @@map("enrichment_credits")
+}
+
+enum CreditTransactionType {
+  PURCHASE
+  RENEWAL
+  BONUS
+  REFUND
+  COMPANY_ENRICHMENT
+  CONTACT_ENRICHMENT
+  BULK_ENRICHMENT
+  ADMIN_ADJUSTMENT
+}
+
+// ============================================
+// WEBHOOKS & INTEGRATIONS
+// ============================================
+
+model Webhook {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Configuration
+  name        String
+  url         String
+  secret      String // For signature validation
+  events      WebhookEvent[]
+  active      Boolean @default(true)
+
+  // Headers (JSON: { "Authorization": "Bearer xyz" })
+  headers     Json?
+
+  // Retry Configuration
+  maxRetries  Int @default(3)
+  retryDelay  Int @default(60) // seconds
+
+  // Stats
+  successCount Int       @default(0)
+  failureCount Int       @default(0)
+  lastSuccess  DateTime?
+  lastFailure  DateTime?
+  lastError    String?   @db.Text
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  deliveries WebhookDelivery[]
+
+  @@index([organizationId])
+  @@index([active])
+  @@map("webhooks")
+}
+
+enum WebhookEvent {
+  TRIGGER_CREATED
+  TRIGGER_UPDATED
+  PROSPECT_CREATED
+  PROSPECT_UPDATED
+  PROSPECT_STATUS_CHANGED
+  CAMPAIGN_COMPLETED
+  CONTACT_ENRICHED
+}
+
+model WebhookDelivery {
+  id        String @id @default(cuid())
+  webhookId String
+  webhook   Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  // Request
+  event       WebhookEvent
+  payload     Json
+  attemptNumber Int @default(1)
+
+  // Response
+  status      Int? // HTTP status code
+  response    String? @db.Text
+  success     Boolean @default(false)
+  errorMessage String? @db.Text
+
+  // Timing
+  sentAt      DateTime
+  respondedAt DateTime?
+  duration    Int? // milliseconds
+
+  @@index([webhookId, sentAt(sort: Desc)])
+  @@index([success])
+  @@map("webhook_deliveries")
+}
+
+model ApiKey {
+  id             String @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Key Info
+  name        String
+  key         String  @unique // Hashed
+  keyPreview  String // Last 4 characters for display
+
+  // Permissions
+  scopes      String[] // ["read:prospects", "write:campaigns"]
+
+  // Status
+  active      Boolean  @default(true)
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  usageCount  Int      @default(0)
+
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@index([organizationId])
+  @@index([key])
+  @@index([active])
+  @@map("api_keys")
+}
+
+// ============================================
+// AUDIT & COMPLIANCE
+// ============================================
+
+model AuditLog {
+  id             String  @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Action Details
+  action     String // CREATE, UPDATE, DELETE, EXPORT, VIEW
+  entityType String // Prospect, Contact, Campaign, etc.
+  entityId   String?
+
+  // Changes (before/after for updates)
+  changes    Json?
+
+  // Context
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+
+  // Result
+  success    Boolean @default(true)
+  errorMessage String? @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+// ============================================
+// ENTITY RESOLUTION QUEUE
+// ============================================
+
+model MatchReviewQueue {
+  id String @id @default(cuid())
+
+  // Source
+  triggerId     String
+  casePartyId   String?
+  defendantName String
+
+  // Matching
+  candidates Json // [{ companyId, name, score, reason }]
+
+  // Resolution
+  status            ReviewStatus @default(PENDING)
+  selectedCompanyId String?
+  decision          MatchDecision?
+
+  // Review Info
+  reviewedBy String?
+  reviewedAt DateTime?
+  reviewNotes String? @db.Text
+
+  // Priority
+  priority Int @default(0)
+
+  // Metadata
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, priority(sort: Desc)])
+  @@index([triggerId])
+  @@index([createdAt(sort: Desc)])
+  @@map("match_review_queue")
+}
+
+enum ReviewStatus {
+  PENDING
+  IN_REVIEW
+  COMPLETED
+  SKIPPED
+}
+
+enum MatchDecision {
+  MATCHED       // Linked to existing company
+  NEW_COMPANY   // Create new company
+  REJECTED      // Not a company (individual, etc.)
+  DUPLICATE     // Already processed
+}
+
+// ============================================
+// ANALYTICS & REPORTING
+// ============================================
+
+model DailyMetric {
+  id             String @id @default(cuid())
+  organizationId String
+  date           DateTime @db.Date
+
+  // Triggers
+  newTriggers       Int @default(0)
+  reviewedTriggers  Int @default(0)
+  archivedTriggers  Int @default(0)
+
+  // Prospects
+  newProspects      Int @default(0)
+  contactedProspects Int @default(0)
+  qualifiedProspects Int @default(0)
+  wonProspects      Int @default(0)
+
+  // Campaigns
+  emailsSent        Int @default(0)
+  emailsOpened      Int @default(0)
+  emailsClicked     Int @default(0)
+  emailsReplied     Int @default(0)
+
+  // Credits
+  creditsUsed       Int @default(0)
+  creditsRemaining  Int @default(0)
+
+  // Revenue
+  revenue           Float @default(0)
+
+  // Engagement
+  activeUsers       Int @default(0)
+  totalActions      Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, date])
+  @@index([organizationId, date(sort: Desc)])
+  @@index([date(sort: Desc)])
+  @@map("daily_metrics")
 }
